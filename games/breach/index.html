@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Grid Breach</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0e17;
+  color: #c0c8d8;
+  font-family: 'Courier New', monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  overflow-x: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#header {
+  padding: 10px;
+  text-align: center;
+  width: 100%;
+  max-width: 500px;
+}
+#header h1 {
+  font-size: 18px;
+  color: #4af;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+#status-bar {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: #8899aa;
+  width: 100%;
+  max-width: 500px;
+}
+#status-bar .power { color: #f84; }
+#status-bar .turn-info { color: #4af; }
+#grid-container {
+  position: relative;
+  width: min(95vw, 500px);
+  height: min(95vw, 500px);
+}
+#grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  background: #151b2b;
+  padding: 2px;
+  border-radius: 4px;
+}
+.cell {
+  position: relative;
+  background: #1a2235;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: min(6vw, 28px);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cell:active { transform: scale(0.95); }
+.cell.highlight-move { background: #1a3a2a; }
+.cell.highlight-attack { background: #3a1a1a; }
+.cell.highlight-push { background: #2a2a1a; }
+.cell.selected { background: #2a3a5a; box-shadow: inset 0 0 0 2px #4af; }
+.cell.threat { background: #2a0a0a; }
+.cell .threat-arrow {
+  position: absolute;
+  font-size: min(3vw, 14px);
+  color: #f44;
+  opacity: 0.8;
+}
+.cell .hp-bar {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: min(2.5vw, 10px);
+  color: #4a8;
+  letter-spacing: 1px;
+}
+.cell .building-hp {
+  position: absolute;
+  bottom: 1px;
+  right: 2px;
+  font-size: min(2.5vw, 10px);
+  color: #fa4;
+}
+.cell.building { background: #1a1a2a; }
+.cell.mountain { background: #2a2a2a; }
+#controls {
+  padding: 10px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 500px;
+}
+.btn {
+  background: #1a2a4a;
+  color: #4af;
+  border: 1px solid #2a3a5a;
+  padding: 10px 18px;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn:active { background: #2a3a5a; }
+.btn:disabled { opacity: 0.3; cursor: default; }
+.btn.end-turn { background: #2a1a1a; border-color: #4a2a2a; color: #f84; }
+#info {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #6a7a8a;
+  text-align: center;
+  max-width: 500px;
+  min-height: 36px;
+}
+#game-over {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 100;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+#game-over.show { display: flex; }
+#game-over h2 { font-size: 28px; margin-bottom: 10px; }
+#game-over p { color: #8899aa; margin-bottom: 20px; font-size: 14px; }
+#game-over .btn { font-size: 16px; padding: 12px 24px; }
+.win h2 { color: #4af; }
+.lose h2 { color: #f44; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>⚡ Grid Breach ⚡</h1>
+</div>
+
+<div id="status-bar">
+  <span>Wave: <span id="wave">1</span>/5</span>
+  <span class="power">Grid: <span id="grid-power">■■■■■■</span></span>
+  <span class="turn-info">Turn <span id="turn">1</span></span>
+</div>
+
+<div id="grid-container">
+  <div id="grid"></div>
+</div>
+
+<div id="info">Tap a mech to select, then tap where to move/attack</div>
+
+<div id="controls">
+  <button class="btn" id="btn-undo" disabled onclick="undoMove()">↩ Undo</button>
+  <button class="btn end-turn" id="btn-end" onclick="endTurn()">End Turn ⚔</button>
+  <button class="btn" id="btn-reset" onclick="resetMoves()">Reset</button>
+</div>
+
+<div id="game-over">
+  <h2 id="go-title"></h2>
+  <p id="go-text"></p>
+  <button class="btn" onclick="initGame()">Play Again</button>
+</div>
+
+<script>
+// === GAME STATE ===
+const W = 8, H = 8;
+let grid, mechs, enemies, buildings, mountains;
+let selectedMech = null;
+let turn = 1, wave = 1, gridPower = 6, maxPower = 6;
+let phase = 'player'; // player, enemy, spawn
+let moveHistory = [];
+let mechActionsThisTurn = {};
+
+// === ENTITY TYPES ===
+const MECH_TYPES = [
+  { id: 'tank', emoji: '🤖', name: 'Titan', hp: 3, maxHp: 3, atk: 2, range: 1, move: 3, ability: 'punch', desc: 'Melee: hits + pushes 1 tile' },
+  { id: 'artillery', emoji: '🔧', name: 'Arc', hp: 2, maxHp: 2, atk: 2, range: 3, move: 2, ability: 'shell', desc: 'Ranged: lobs shell, pushes adjacent' },
+  { id: 'dash', emoji: '⚡', name: 'Bolt', hp: 2, maxHp: 2, atk: 1, range: 0, move: 4, ability: 'dash', desc: 'Dash: charges in a line, pushes target' },
+];
+
+const ENEMY_TYPES = {
+  bug:    { emoji: '🔴', name: 'Bug', hp: 1, atk: 1, move: 2 },
+  beetle: { emoji: '🟤', name: 'Beetle', hp: 2, atk: 2, move: 1 },
+  wasp:   { emoji: '🟡', name: 'Wasp', hp: 1, atk: 1, move: 3 },
+};
+
+// === INIT ===
+function initGame() {
+  document.getElementById('game-over').className = '';
+  turn = 1; wave = 1; gridPower = maxPower;
+  moveHistory = [];
+  mechActionsThisTurn = {};
+  phase = 'player';
+  selectedMech = null;
+
+  grid = Array.from({length: H}, () => Array(W).fill(null));
+  mechs = [];
+  enemies = [];
+  buildings = [];
+  mountains = [];
+
+  // Place mountains (obstacles)
+  const mtnPos = [[2,2],[5,5],[2,5],[5,2]];
+  mtnPos.forEach(([r,c]) => {
+    mountains.push({r,c});
+    grid[r][c] = {type:'mountain'};
+  });
+
+  // Place buildings
+  const bldPos = [[0,3],[0,4],[1,6],[3,0],[4,7],[6,1],[7,3],[7,4]];
+  bldPos.forEach(([r,c]) => {
+    const b = {r, c, hp: 1};
+    buildings.push(b);
+    grid[r][c] = {type:'building', ref: b};
+  });
+
+  // Place mechs
+  const mechPos = [[6,2],[6,4],[6,6]];
+  MECH_TYPES.forEach((mt, i) => {
+    const [r,c] = mechPos[i];
+    const m = {...mt, r, c, moved: false, acted: false, originalR: r, originalC: c};
+    mechs.push(m);
+    grid[r][c] = {type:'mech', ref: m};
+  });
+
+  spawnEnemies();
+  render();
+  updateUI();
+}
+
+function spawnEnemies() {
+  const count = Math.min(2 + wave, 6);
+  const types = wave <= 2 ? ['bug'] : wave <= 4 ? ['bug','beetle'] : ['bug','beetle','wasp'];
+  const spawnRows = [0,1];
+  let spawned = 0;
+  let attempts = 0;
+  while (spawned < count && attempts < 50) {
+    attempts++;
+    const r = spawnRows[Math.floor(Math.random() * spawnRows.length)];
+    const c = Math.floor(Math.random() * W);
+    if (grid[r][c]) continue;
+    const tname = types[Math.floor(Math.random() * types.length)];
+    const et = ENEMY_TYPES[tname];
+    const e = {...et, r, c, typeName: tname, intent: null, targetR: null, targetC: null};
+    enemies.push(e);
+    grid[r][c] = {type:'enemy', ref: e};
+    spawned++;
+  }
+  assignIntents();
+}
+
+function assignIntents() {
+  enemies.forEach(e => {
+    // Find closest target (mech or building)
+    let best = null, bestDist = 999;
+    mechs.forEach(m => {
+      if (m.hp <= 0) return;
+      const d = Math.abs(m.r - e.r) + Math.abs(m.c - e.c);
+      if (d < bestDist) { bestDist = d; best = {r: m.r, c: m.c}; }
+    });
+    buildings.forEach(b => {
+      if (b.hp <= 0) return;
+      const d = Math.abs(b.r - e.r) + Math.abs(b.c - e.c);
+      if (d < bestDist - 1) { bestDist = d; best = {r: b.r, c: b.c}; }
+    });
+
+    if (best) {
+      // Move toward target
+      let dr = Math.sign(best.r - e.r);
+      let dc = Math.sign(best.c - e.c);
+      let moveR = e.r, moveC = e.c;
+      for (let step = 0; step < e.move; step++) {
+        let nr = moveR + dr, nc = moveC + dc;
+        if (nr < 0 || nr >= H || nc < 0 || nc >= W) break;
+        if (grid[nr][nc] && grid[nr][nc].type !== 'enemy') {
+          // try just row or just col
+          if (dr !== 0 && moveR + dr >= 0 && moveR + dr < H && !grid[moveR+dr][moveC]) {
+            nr = moveR + dr; nc = moveC;
+          } else if (dc !== 0 && moveC + dc >= 0 && moveC + dc < W && !grid[moveR][moveC+dc]) {
+            nr = moveR; nc = moveC + dc;
+          } else break;
+        }
+        if (grid[nr][nc]) break;
+        moveR = nr; moveC = nc;
+      }
+      e.intent = 'move';
+      e.targetR = moveR;
+      e.targetC = moveC;
+
+      // Check if adjacent to a target after move — then attack
+      const adj = [[0,1],[0,-1],[1,0],[-1,0]];
+      for (const [ar, ac] of adj) {
+        const tr = moveR + ar, tc = moveC + ac;
+        if (tr < 0 || tr >= H || tc < 0 || tc >= W) continue;
+        const cell = grid[tr][tc];
+        if (cell && (cell.type === 'mech' || cell.type === 'building')) {
+          e.intent = 'attack';
+          e.attackR = tr;
+          e.attackC = tc;
+          break;
+        }
+      }
+      // Also check from final position
+      if (e.intent === 'move') {
+        for (const [ar, ac] of adj) {
+          const tr = moveR + ar, tc = moveC + ac;
+          if (tr < 0 || tr >= H || tc < 0 || tc >= W) continue;
+          if (tr === e.r && tc === e.c) continue; // skip own current pos
+          const cell = grid[tr][tc];
+          if (cell && (cell.type === 'mech' || cell.type === 'building')) {
+            e.intent = 'attack';
+            e.attackR = tr;
+            e.attackC = tc;
+            break;
+          }
+        }
+      }
+    }
+  });
+}
+
+// === RENDERING ===
+function render() {
+  const gridEl = document.getElementById('grid');
+  gridEl.innerHTML = '';
+
+  for (let r = 0; r < H; r++) {
+    for (let c = 0; c < W; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.r = r;
+      cell.dataset.c = c;
+
+      const g = grid[r][c];
+
+      if (g) {
+        if (g.type === 'mountain') {
+          cell.classList.add('mountain');
+          cell.textContent = '⛰️';
+        } else if (g.type === 'building') {
+          cell.classList.add('building');
+          cell.textContent = g.ref.hp > 0 ? '🏢' : '🔥';
+          if (g.ref.hp > 0) {
+            const hpEl = document.createElement('span');
+            hpEl.className = 'building-hp';
+            hpEl.textContent = '♥';
+            cell.appendChild(hpEl);
+          }
+        } else if (g.type === 'mech') {
+          cell.textContent = g.ref.emoji;
+          const hpEl = document.createElement('span');
+          hpEl.className = 'hp-bar';
+          hpEl.textContent = '●'.repeat(g.ref.hp) + '○'.repeat(g.ref.maxHp - g.ref.hp);
+          cell.appendChild(hpEl);
+        } else if (g.type === 'enemy') {
+          cell.textContent = g.ref.emoji;
+          const hpEl = document.createElement('span');
+          hpEl.className = 'hp-bar';
+          hpEl.textContent = '●'.repeat(g.ref.hp);
+          cell.appendChild(hpEl);
+        }
+      }
+
+      // Show threat indicators
+      enemies.forEach(e => {
+        if (e.hp <= 0) return;
+        if (e.intent === 'attack' && e.attackR === r && e.attackC === c) {
+          cell.classList.add('threat');
+          const arrow = document.createElement('span');
+          arrow.className = 'threat-arrow';
+          // Arrow direction from enemy final pos
+          const fr = e.targetR || e.r, fc = e.targetC || e.c;
+          const dr = r - fr, dc = c - fc;
+          if (dr === -1) arrow.textContent = '↑';
+          else if (dr === 1) arrow.textContent = '↓';
+          else if (dc === -1) arrow.textContent = '←';
+          else if (dc === 1) arrow.textContent = '→';
+          else arrow.textContent = '✕';
+          arrow.style.top = '1px';
+          arrow.style.right = '2px';
+          cell.appendChild(arrow);
+        }
+      });
+
+      // Highlight selected mech moves
+      if (selectedMech) {
+        const m = selectedMech;
+        if (m.r === r && m.c === c) {
+          cell.classList.add('selected');
+        }
+        if (!m.moved && isValidMove(m, r, c)) {
+          cell.classList.add('highlight-move');
+        }
+        if (m.moved && !m.acted && isValidAttack(m, r, c)) {
+          cell.classList.add('highlight-attack');
+        }
+      }
+
+      cell.addEventListener('click', () => cellClick(r, c));
+      gridEl.appendChild(cell);
+    }
+  }
+}
+
+function updateUI() {
+  document.getElementById('wave').textContent = wave;
+  document.getElementById('turn').textContent = turn;
+  const pw = document.getElementById('grid-power');
+  pw.textContent = '■'.repeat(Math.max(0,gridPower)) + '□'.repeat(Math.max(0,maxPower - gridPower));
+  if (gridPower <= 2) pw.style.color = '#f44';
+  else if (gridPower <= 4) pw.style.color = '#fa4';
+  else pw.style.color = '#f84';
+
+  document.getElementById('btn-undo').disabled = moveHistory.length === 0;
+}
+
+// === MOVEMENT / PATHFINDING ===
+function dist(r1,c1,r2,c2) { return Math.abs(r1-r2) + Math.abs(c1-c2); }
+
+function isValidMove(mech, r, c) {
+  if (r === mech.r && c === mech.c) return false;
+  if (r < 0 || r >= H || c < 0 || c >= W) return false;
+  if (grid[r][c]) return false;
+  if (dist(mech.r, mech.c, r, c) > mech.move) return false;
+  // BFS check path exists
+  return hasPath(mech.r, mech.c, r, c, mech.move);
+}
+
+function hasPath(sr, sc, er, ec, maxDist) {
+  const visited = new Set();
+  const queue = [[sr, sc, 0]];
+  visited.add(`${sr},${sc}`);
+  while (queue.length) {
+    const [r, c, d] = queue.shift();
+    if (r === er && c === ec) return true;
+    if (d >= maxDist) continue;
+    for (const [dr, dc] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+      const nr = r+dr, nc = c+dc;
+      if (nr<0||nr>=H||nc<0||nc>=W) continue;
+      const key = `${nr},${nc}`;
+      if (visited.has(key)) continue;
+      if (grid[nr][nc] && !(nr===er && nc===ec)) continue;
+      if (grid[nr][nc] && grid[nr][nc].type !== undefined) {
+        // Can only move to empty squares
+        if (nr===er && nc===ec && grid[nr][nc]) continue;
+      }
+      visited.add(key);
+      queue.push([nr, nc, d+1]);
+    }
+  }
+  return false;
+}
+
+function isValidAttack(mech, r, c) {
+  if (mech.ability === 'punch') {
+    // Adjacent only
+    if (dist(mech.r, mech.c, r, c) !== 1) return false;
+    const cell = grid[r][c];
+    return cell && cell.type === 'enemy';
+  }
+  if (mech.ability === 'shell') {
+    // Range 2-3, needs enemy
+    const d = dist(mech.r, mech.c, r, c);
+    if (d < 2 || d > mech.range) return false;
+    const cell = grid[r][c];
+    return cell && cell.type === 'enemy';
+  }
+  if (mech.ability === 'dash') {
+    // Must be in same row or col, charges to adjacent
+    if (mech.r !== r && mech.c !== c) return false;
+    if (mech.r === r && mech.c === c) return false;
+    const cell = grid[r][c];
+    return cell && cell.type === 'enemy';
+  }
+  return false;
+}
+
+// === ACTIONS ===
+function cellClick(r, c) {
+  if (phase !== 'player') return;
+
+  const cell = grid[r][c];
+
+  // Click on own mech: select it
+  if (cell && cell.type === 'mech') {
+    const m = cell.ref;
+    if (selectedMech === m) { selectedMech = null; }
+    else { selectedMech = m; }
+    setInfo(selectedMech ? `${selectedMech.name}: ${selectedMech.desc}` : '');
+    render();
+    return;
+  }
+
+  if (!selectedMech) {
+    if (cell && cell.type === 'enemy') {
+      setInfo(`${cell.ref.name} HP:${cell.ref.hp} ATK:${cell.ref.atk}`);
+    }
+    return;
+  }
+
+  const m = selectedMech;
+
+  // Move
+  if (!m.moved && isValidMove(m, r, c)) {
+    moveHistory.push({
+      mechId: m.id,
+      fromR: m.r, fromC: m.c,
+      type: 'move'
+    });
+    grid[m.r][m.c] = null;
+    m.originalR = m.r; m.originalC = m.c;
+    m.r = r; m.c = c;
+    grid[r][c] = {type:'mech', ref: m};
+    m.moved = true;
+    assignIntents();
+    setInfo(`${m.name} moved. Tap enemy to attack or select another mech.`);
+    render();
+    updateUI();
+    return;
+  }
+
+  // Attack
+  if (m.moved && !m.acted && cell && cell.type === 'enemy' && isValidAttack(m, r, c)) {
+    performAttack(m, cell.ref, r, c);
+    m.acted = true;
+    selectedMech = null;
+    assignIntents();
+    setInfo('');
+    render();
+    updateUI();
+    return;
+  }
+
+  // Dash attack (move+attack in one)
+  if (!m.moved && m.ability === 'dash' && cell && cell.type === 'enemy') {
+    if (m.r === r || m.c === c) {
+      // Dash to adjacent tile of enemy
+      const dr = Math.sign(r - m.r), dc = Math.sign(c - m.c);
+      const adjR = r - dr, adjC = c - dc;
+      if (adjR >= 0 && adjR < H && adjC >= 0 && adjC < W && (!grid[adjR][adjC] || (adjR === m.r && adjC === m.c))) {
+        moveHistory.push({ mechId: m.id, fromR: m.r, fromC: m.c, type: 'dash' });
+        grid[m.r][m.c] = null;
+        m.r = adjR; m.c = adjC;
+        grid[adjR][adjC] = {type:'mech', ref: m};
+        m.moved = true;
+        performAttack(m, cell.ref, r, c);
+        m.acted = true;
+        selectedMech = null;
+        assignIntents();
+        render();
+        updateUI();
+        return;
+      }
+    }
+  }
+}
+
+function performAttack(mech, enemy, er, ec) {
+  enemy.hp -= mech.atk;
+
+  // Push mechanic
+  if (mech.ability === 'punch' || mech.ability === 'dash') {
+    const dr = Math.sign(er - mech.r);
+    const dc = Math.sign(ec - mech.c);
+    pushEntity(enemy, er, ec, dr, dc);
+  }
+  if (mech.ability === 'shell') {
+    // Push all adjacent to impact
+    [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dr,dc]) => {
+      const ar = er+dr, ac = ec+dc;
+      if (ar<0||ar>=H||ac<0||ac>=W) return;
+      const adj = grid[ar][ac];
+      if (adj && adj.type === 'enemy' && adj.ref !== enemy) {
+        pushEntity(adj.ref, ar, ac, dr, dc);
+      }
+    });
+  }
+
+  if (enemy.hp <= 0) {
+    grid[er][ec] = grid[er][ec]?.ref === enemy ? null : grid[er][ec];
+    // Find and remove from array
+    const idx = enemies.indexOf(enemy);
+    if (idx >= 0) {
+      // Clear from grid at current pos
+      if (grid[enemy.r]?.[enemy.c]?.ref === enemy) grid[enemy.r][enemy.c] = null;
+      enemies.splice(idx, 1);
+    }
+    setInfo(`${enemy.name} destroyed!`);
+  } else {
+    setInfo(`${enemy.name} hit! HP: ${enemy.hp}`);
+  }
+}
+
+function pushEntity(entity, fromR, fromC, dr, dc) {
+  const nr = fromR + dr, nc = fromC + dc;
+  if (nr < 0 || nr >= H || nc < 0 || nc >= W) {
+    // Pushed off edge — extra damage
+    entity.hp -= 1;
+    return;
+  }
+  const target = grid[nr][nc];
+  if (target) {
+    // Collision damage
+    entity.hp -= 1;
+    if (target.type === 'enemy') target.ref.hp -= 1;
+    if (target.type === 'building') {
+      target.ref.hp -= 1;
+      if (target.ref.hp <= 0) gridPower--;
+    }
+    // Check if bumped enemy died
+    if (target.type === 'enemy' && target.ref.hp <= 0) {
+      const idx = enemies.indexOf(target.ref);
+      if (idx >= 0) enemies.splice(idx, 1);
+      grid[nr][nc] = null;
+      // Now push into that space
+      if (entity.hp > 0) {
+        grid[fromR][fromC] = null;
+        entity.r = nr; entity.c = nc;
+        grid[nr][nc] = {type:'enemy', ref: entity};
+      }
+    }
+    return;
+  }
+  // Move to empty space
+  if (grid[fromR][fromC]?.ref === entity) grid[fromR][fromC] = null;
+  entity.r = nr; entity.c = nc;
+  grid[nr][nc] = {type:'enemy', ref: entity};
+}
+
+function undoMove() {
+  if (moveHistory.length === 0) return;
+  const last = moveHistory.pop();
+  const m = mechs.find(x => x.id === last.mechId);
+  if (!m) return;
+  grid[m.r][m.c] = null;
+  m.r = last.fromR; m.c = last.fromC;
+  grid[m.r][m.c] = {type:'mech', ref: m};
+  m.moved = false; m.acted = false;
+  selectedMech = null;
+  assignIntents();
+  render();
+  updateUI();
+}
+
+function resetMoves() {
+  while (moveHistory.length) undoMove();
+}
+
+// === END TURN ===
+function endTurn() {
+  if (phase !== 'player') return;
+  phase = 'enemy';
+  selectedMech = null;
+  moveHistory = [];
+  setInfo('Enemies acting...');
+  render();
+
+  setTimeout(() => {
+    executeEnemyTurn();
+    cleanupDead();
+
+    if (checkGameOver()) return;
+
+    // Check wave complete
+    if (enemies.length === 0) {
+      wave++;
+      if (wave > 5) {
+        gameOver(true);
+        return;
+      }
+      setInfo(`Wave ${wave} incoming!`);
+      setTimeout(() => {
+        spawnEnemies();
+        startNewTurn();
+      }, 800);
+    } else {
+      assignIntents();
+      startNewTurn();
+    }
+  }, 500);
+}
+
+function startNewTurn() {
+  turn++;
+  phase = 'player';
+  mechs.forEach(m => { m.moved = false; m.acted = false; });
+  moveHistory = [];
+  render();
+  updateUI();
+}
+
+function executeEnemyTurn() {
+  enemies.forEach(e => {
+    if (e.hp <= 0) return;
+
+    // Move to target position
+    if (e.targetR !== null && (e.targetR !== e.r || e.targetC !== e.c)) {
+      const destCell = grid[e.targetR][e.targetC];
+      if (!destCell) {
+        grid[e.r][e.c] = null;
+        e.r = e.targetR; e.c = e.targetC;
+        grid[e.r][e.c] = {type:'enemy', ref: e};
+      }
+    }
+
+    // Attack
+    if (e.intent === 'attack') {
+      const tr = e.attackR, tc = e.attackC;
+      const target = grid[tr]?.[tc];
+      if (target) {
+        if (target.type === 'mech') {
+          target.ref.hp -= e.atk;
+          setInfo(`${target.ref.name} hit by ${e.name}!`);
+        } else if (target.type === 'building') {
+          target.ref.hp -= e.atk;
+          if (target.ref.hp <= 0) {
+            gridPower--;
+            setInfo(`Building destroyed! Grid power: ${gridPower}`);
+          }
+        }
+      }
+    }
+  });
+}
+
+function cleanupDead() {
+  // Remove dead enemies
+  enemies = enemies.filter(e => {
+    if (e.hp <= 0) {
+      if (grid[e.r]?.[e.c]?.ref === e) grid[e.r][e.c] = null;
+      return false;
+    }
+    return true;
+  });
+  // Remove dead mechs
+  mechs.forEach(m => {
+    if (m.hp <= 0) {
+      if (grid[m.r]?.[m.c]?.ref === m) grid[m.r][m.c] = null;
+    }
+  });
+  // Update building visuals
+  buildings.forEach(b => {
+    if (b.hp <= 0 && grid[b.r][b.c]?.type === 'building') {
+      grid[b.r][b.c].ref = b; // Keep ref for rendering as fire
+    }
+  });
+  updateUI();
+}
+
+function checkGameOver() {
+  if (gridPower <= 0) { gameOver(false); return true; }
+  const alive = mechs.filter(m => m.hp > 0);
+  if (alive.length === 0) { gameOver(false); return true; }
+  return false;
+}
+
+function gameOver(win) {
+  const el = document.getElementById('game-over');
+  el.className = 'show ' + (win ? 'win' : 'lose');
+  document.getElementById('go-title').textContent = win ? '⚡ VICTORY ⚡' : '💥 GRID LOST 💥';
+  document.getElementById('go-text').textContent = win
+    ? `Defended the grid in ${turn} turns!`
+    : `Grid power depleted. Wave ${wave}, Turn ${turn}.`;
+}
+
+function setInfo(text) {
+  document.getElementById('info').textContent = text;
+}
+
+// === START ===
+initGame();
+</script>
+</body>
+</html>
